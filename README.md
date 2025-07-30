@@ -1,28 +1,199 @@
-# Bug Description
-The bug description should be clear and concise, but being clear is the most important part. You should put yourself in the shoes of the project team and ask yourself the question: Am I describing the vulnerability and its impact clearly, accurately, and without any unnecessary assumptions? 
+# Peggy Bridge Validator Duplication Vulnerability PoC
 
-# Brief/Intro
-Provide a very short and concise (one paragraph) statement on what the problem is, and what the consequences would be if the bug were exploited in the wild. 
+This project demonstrates a critical vulnerability in the Peggy bridge smart contract that allows an attacker to bypass validator consensus requirements through validator address duplication, leading to complete drainage of bridge funds.
 
-# Details
-Offer a detailed explanation of the vulnerability itself. Do not leave out any relevant information. Code snippets should be supplied whenever helpful, as long as they don’t overcrowd the report with unnecessary details. This section should make it obvious that you understand exactly what you’re talking about, and more importantly, it should be clear by this point that the vulnerability does exist. 
+## Vulnerability Overview
 
-# Impact
-This section is where you provide a detailed breakdown of possible losses from an exploit, especially if there are funds at risk. This illustrates the severity of the vulnerability, but it also provides the best possible case for you to be paid your fair share. Make sure the selected impact is within the project’s list of in-scope impacts.
+**Severity:** Critical  
+**Impact:** Complete loss of all bridged assets  
+**Root Cause:** Lack of validator address uniqueness validation in `updateValset` and power double-counting in `checkValidatorSignatures`
 
-# Risk Breakdown
-You should assess how difficult it is to exploit the disclosed vulnerability. The NIST’s Common Vulnerability Scoring System Calculator is not well-suited for addressing a blockchain/DLT bug. We recommend using the Immunefi Vulnerability Severity Classification System instead.
+The Peggy bridge contract fails to validate that validator addresses in a new validator set are unique. An attacker can exploit this by proposing a validator set containing their own address multiple times, then use a single signature repeatedly to amplify their voting power beyond the required threshold.
 
-# Recommendation
-You should include a recommendation on how to fix the bug (or mitigate the impact) in this section. Once again, this actually helps make the case for a good payout, as it illustrates your expertise and further explains the underlying vulnerability.
+## Technical Details
 
-# References
-In this section, you are welcome to add any relevant links to documentation or smart contracts. But most importantly, this is where you write the Proof of Concept (when required).
+### Core Vulnerability
 
-# Proof of Concept
-This section is crucial, because it makes the vulnerability “real” in a way that nothing else can. Unfortunately, this is also the section that whitehats most often fail to fill out correctly. The first and most important component of a successful proof of concept (PoC) is that it should be runnable exploit code…
+The vulnerability exists in two functions:
 
-* not a list of steps (even though this can exist somewhere in the report)
-* not pseudo-code
-* not just the project’s smart contracts
-* …but an actual, runnable attack vector. A valid PoC might be an attack script (a Hardhat/Foundry test file, for example), a smart contract with functions that can trigger the exploit, or any code that manages to somehow exploit the project’s vulnerability. 
+1. **`updateValset`** - Accepts validator sets without checking for duplicate addresses
+2. **`checkValidatorSignatures`** - Counts voting power for each signature position independently, allowing the same validator's power to be counted multiple times
+
+### Attack Flow
+
+1. **Malicious Validator Set Injection:** Attacker calls `updateValset` with a validator set where their address appears multiple times:
+   ```
+   validators: [AttackerAddress, AttackerAddress, AttackerAddress]
+   powers:     [34%, 33%, 33%]
+   ```
+
+2. **Power Amplification:** Once the malicious set is active, attacker calls `submitBatch` providing the same signature three times. The contract incorrectly calculates their power as 34% + 33% + 33% = 100%, far exceeding the 67% threshold.
+
+3. **Fund Drainage:** With amplified voting power, the attacker can unilaterally approve any transaction batch, draining all bridge funds.
+
+## Prerequisites
+
+- [Foundry](https://getfoundry.sh/) installed
+- Git
+
+## Setup and Execution
+
+### Clone and Setup
+
+```bash
+git clone <repository-url>
+cd peggy-poc
+forge install
+```
+
+### Run the Exploit
+
+```bash
+forge test --match-test test_exploitValidatorDuplication -vvv
+```
+
+### Expected Output
+
+The test demonstrates a complete bridge drain:
+
+```
+--- Initial State ---
+Peggy Bridge Balance: 1,000,000 DUMMY tokens
+Attacker Balance: 0 DUMMY tokens
+
+--- Attack Step 1: Proposing Malicious Valset ---
+Success: Malicious validator set has been approved and is now active.
+
+--- Attack Step 2: Draining Funds with Amplified Power ---
+Success: submitBatch executed with a single signature.
+
+--- Final State ---
+Peggy Bridge Balance: 0 DUMMY tokens
+Attacker Balance: 1,000,000 DUMMY tokens
+
+Vulnerability Confirmed: All funds stolen.
+```
+
+## Vulnerability Details
+
+### Affected Functions
+
+**`updateValset` Function:**
+```solidity
+function updateValset(
+    ValsetArgs calldata _newValset,
+    // ...
+) external whenNotPaused {
+    // CRITICAL FLAW: No uniqueness check for validator addresses
+    // in _newValset.validators array
+    
+    bytes32 newCheckpoint = makeCheckpoint(_newValset, state_peggyId);
+    checkValidatorSignatures(/* ... */);
+    
+    // Malicious checkpoint gets saved
+    state_lastValsetCheckpoint = newCheckpoint;
+}
+```
+
+**`checkValidatorSignatures` Function:**
+```solidity
+function checkValidatorSignatures(
+    address[] memory _currentValidators,
+    uint256[] memory _currentPowers,
+    // ...
+) private pure {
+    uint256 cumulativePower = 0;
+    for (uint256 i = 0; i < _currentValidators.length; i++) {
+        // Signature verification passes for duplicate validators
+        require(verifySig(/* ... */), "Validator signature does not match.");
+        
+        // CRITICAL FLAW: Same validator's power counted multiple times
+        cumulativePower = cumulativePower + _currentPowers[i];
+    }
+}
+```
+
+### Impact Assessment
+
+- **Complete Fund Loss:** Attacker gains full control over bridge assets
+- **Protocol Insolvency:** Bridge becomes unable to honor withdrawal requests  
+- **Trust Destruction:** Permanent damage to protocol reputation
+- **Operational Shutdown:** Bridge functionality becomes permanently compromised
+
+## Recommended Fix
+
+Implement validator address uniqueness validation:
+
+```solidity
+function updateValset(ValsetArgs calldata _newValset, /* ... */) external {
+    // Add uniqueness check
+    for (uint256 i = 0; i < _newValset.validators.length; i++) {
+        for (uint256 j = i + 1; j < _newValset.validators.length; j++) {
+            require(
+                _newValset.validators[i] != _newValset.validators[j],
+                "Duplicate validator addresses not allowed"
+            );
+        }
+    }
+    // ... rest of function
+}
+```
+
+Alternative fix in `checkValidatorSignatures`:
+
+```solidity
+mapping(address => bool) validatorCounted;
+for (uint256 i = 0; i < _currentValidators.length; i++) {
+    if (_v[i] != 0) {
+        address validator = _currentValidators[i];
+        require(verifySig(/* ... */), "Invalid signature");
+        
+        // Only count each validator once
+        if (!validatorCounted[validator]) {
+            validatorCounted[validator] = true;
+            cumulativePower = cumulativePower + _currentPowers[i];
+        }
+    }
+}
+```
+
+## Files Structure
+
+```
+peggy-poc/
+├── README.md
+├── foundry.toml
+├── src/
+│   ├── Peggy.sol              # Vulnerable Peggy bridge contract
+│   ├── CosmosERC20.sol        # Test token contract
+│   └── OwnableUpgradeableWithExpiry.sol
+└── test/
+    └── Peggy.t.sol            # Complete vulnerability demonstration
+```
+
+## Test Details
+
+The proof of concept test (`test_exploitValidatorDuplication`) demonstrates:
+
+1. Initial bridge setup with 1,000,000 test tokens
+2. Honest validator set with 3 validators and 67% power threshold
+3. Malicious validator set proposal with duplicated attacker address
+4. Successful validation bypass using single signature
+5. Complete fund drainage to attacker wallet
+
+## Verification
+
+The vulnerability can be verified by:
+
+1. Examining the test output showing 100% fund transfer
+2. Checking that only a single validator signature was used
+3. Confirming the power threshold bypass mechanism
+4. Validating the permanent nature of the exploit
+
+## Disclaimer
+
+This code is provided for educational and security research purposes only. Do not use this exploit against any production systems. The authors are not responsible for any misuse of this information.
+
+## License
+
+MIT License - See LICENSE file for details. 
