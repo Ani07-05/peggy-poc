@@ -140,7 +140,7 @@ The vulnerability can be verified by:
 4. Validating the permanent nature of the exploit
 
 
-https://github.com/user-attachments/assets/b1e9c2b1-e518-40e1-b5e4-8384eaa7b36c
+![PoC Demonstration](./ss.png)
 
 ## Disclaimer
 
