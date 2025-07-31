@@ -41,7 +41,7 @@ The vulnerability exists in two functions:
 ### Clone and Setup
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/Ani07-05/peggy-poc
 cd peggy-poc
 forge install
 ```
@@ -120,57 +120,6 @@ function checkValidatorSignatures(
 - **Trust Destruction:** Permanent damage to protocol reputation
 - **Operational Shutdown:** Bridge functionality becomes permanently compromised
 
-## Recommended Fix
-
-Implement validator address uniqueness validation:
-
-```solidity
-function updateValset(ValsetArgs calldata _newValset, /* ... */) external {
-    // Add uniqueness check
-    for (uint256 i = 0; i < _newValset.validators.length; i++) {
-        for (uint256 j = i + 1; j < _newValset.validators.length; j++) {
-            require(
-                _newValset.validators[i] != _newValset.validators[j],
-                "Duplicate validator addresses not allowed"
-            );
-        }
-    }
-    // ... rest of function
-}
-```
-
-Alternative fix in `checkValidatorSignatures`:
-
-```solidity
-mapping(address => bool) validatorCounted;
-for (uint256 i = 0; i < _currentValidators.length; i++) {
-    if (_v[i] != 0) {
-        address validator = _currentValidators[i];
-        require(verifySig(/* ... */), "Invalid signature");
-        
-        // Only count each validator once
-        if (!validatorCounted[validator]) {
-            validatorCounted[validator] = true;
-            cumulativePower = cumulativePower + _currentPowers[i];
-        }
-    }
-}
-```
-
-## Files Structure
-
-```
-peggy-poc/
-├── README.md
-├── foundry.toml
-├── src/
-│   ├── Peggy.sol              # Vulnerable Peggy bridge contract
-│   ├── CosmosERC20.sol        # Test token contract
-│   └── OwnableUpgradeableWithExpiry.sol
-└── test/
-    └── Peggy.t.sol            # Complete vulnerability demonstration
-```
-
 ## Test Details
 
 The proof of concept test (`test_exploitValidatorDuplication`) demonstrates:
@@ -190,10 +139,10 @@ The vulnerability can be verified by:
 3. Confirming the power threshold bypass mechanism
 4. Validating the permanent nature of the exploit
 
+
+https://github.com/user-attachments/assets/b1e9c2b1-e518-40e1-b5e4-8384eaa7b36c
+
 ## Disclaimer
 
 This code is provided for educational and security research purposes only. Do not use this exploit against any production systems. The authors are not responsible for any misuse of this information.
 
-## License
-
-MIT License - See LICENSE file for details. 
